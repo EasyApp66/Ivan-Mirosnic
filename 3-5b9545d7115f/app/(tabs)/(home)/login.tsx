@@ -1,10 +1,9 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
   TextInput,
-  TouchableOpacity,
   StyleSheet,
   Alert,
   Platform,
@@ -13,20 +12,30 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import Animated, { FadeIn, FadeInDown, FadeInUp } from 'react-native-reanimated';
 import { colors } from '@/styles/commonStyles';
 import { IconSymbol } from '@/components/IconSymbol';
-import SnowAnimation from '@/components/SnowAnimation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useLanguage } from '@/contexts/LanguageContext';
+import AnimatedButton from '@/components/AnimatedButton';
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { signIn, signUp, resetPassword } = useAuth();
+  const { signIn, signUp, resetPassword, user } = useAuth();
   const { t } = useLanguage();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // Automatically navigate to budget screen when user is authenticated
+  useEffect(() => {
+    if (user) {
+      console.log('LoginScreen: User authenticated, navigating to budget screen');
+      // Use replace to prevent going back to login screen
+      router.replace('/(tabs)/budget');
+    }
+  }, [user, router]);
 
   const handleSubmit = async () => {
     if (!email || !password) {
@@ -59,18 +68,59 @@ export default function LoginScreen() {
         }
       } else {
         // Sign in (handles both admin and regular users)
-        const { error } = await signIn(email, password);
+        const { error, success } = await signIn(email, password);
+        
         if (error) {
           console.error('Sign in error:', error);
-          // Show user-friendly error message
-          const errorMessage = error.message || t('loginFailed');
-          Alert.alert(t('error'), errorMessage);
-        } else {
-          // Wait a bit for the auth state to update
+          
+          // Check if this is an admin account that needs registration
+          if (error.needsRegistration) {
+            Alert.alert(
+              'Admin-Konto erstellen',
+              'Das Admin-Konto existiert noch nicht. Möchten Sie es jetzt erstellen?',
+              [
+                {
+                  text: 'Abbrechen',
+                  style: 'cancel',
+                },
+                {
+                  text: 'Registrieren',
+                  onPress: () => {
+                    setIsSignUp(true);
+                  },
+                },
+              ]
+            );
+          } else {
+            // Show user-friendly error message
+            let errorMessage = error.message || t('loginFailed');
+            
+            // Translate common error messages to German
+            if (errorMessage.includes('Invalid login credentials')) {
+              errorMessage = 'Ungültige Anmeldedaten. Bitte überprüfen Sie Ihre E-Mail und Ihr Passwort.';
+            } else if (errorMessage.includes('Email not confirmed')) {
+              errorMessage = 'E-Mail noch nicht bestätigt. Bitte überprüfen Sie Ihr E-Mail-Postfach.';
+            } else if (errorMessage.includes('Invalid')) {
+              errorMessage = 'Falsches Passwort oder E-Mail-Adresse. Bitte versuchen Sie es erneut.';
+            }
+            
+            Alert.alert('Anmeldung fehlgeschlagen', errorMessage);
+          }
+        } else if (success) {
+          // Login successful - the useEffect will handle navigation
+          console.log('Login successful, waiting for auth state update');
+          // Show a brief success message
+          Alert.alert(
+            'Erfolgreich angemeldet',
+            'Sie werden zur Budget-Seite weitergeleitet...',
+            [],
+            { cancelable: false }
+          );
+          
+          // Give a moment for the alert to show, then the useEffect will navigate
           setTimeout(() => {
-            console.log('Login successful, navigating to budget screen');
-            router.replace('/(tabs)/budget');
-          }, 100);
+            // The useEffect will handle navigation when user state updates
+          }, 500);
         }
       }
     } catch (error: any) {
@@ -109,15 +159,8 @@ export default function LoginScreen() {
     );
   };
 
-  const handleSkipLogin = () => {
-    console.log('Skipping login, navigating to budget screen');
-    router.replace('/(tabs)/budget');
-  };
-
   return (
     <View style={styles.container}>
-      <SnowAnimation />
-
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}
@@ -128,30 +171,38 @@ export default function LoginScreen() {
           showsVerticalScrollIndicator={false}
         >
           {/* Back Button */}
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => router.back()}
-          >
-            <IconSymbol
-              ios_icon_name="chevron.left"
-              android_material_icon_name="arrow-back"
-              size={24}
-              color={colors.text}
-            />
-          </TouchableOpacity>
+          <Animated.View entering={FadeInUp.duration(400).delay(100)}>
+            <AnimatedButton
+              style={styles.backButton}
+              onPress={() => router.back()}
+            >
+              <IconSymbol
+                ios_icon_name="chevron.left"
+                android_material_icon_name="arrow-back"
+                size={24}
+                color={colors.text}
+              />
+            </AnimatedButton>
+          </Animated.View>
 
           {/* Header */}
-          <View style={styles.header}>
+          <Animated.View 
+            style={styles.header}
+            entering={FadeInDown.duration(500).delay(200)}
+          >
             <Text style={styles.title}>
               {isSignUp ? t('createAccount') : t('welcomeBack')}
             </Text>
             <Text style={styles.subtitle}>
               {isSignUp ? t('createAccountSubtitle') : t('signInSubtitle')}
             </Text>
-          </View>
+          </Animated.View>
 
           {/* Form */}
-          <View style={styles.form}>
+          <Animated.View 
+            style={styles.form}
+            entering={FadeIn.duration(600).delay(300)}
+          >
             <View style={styles.inputContainer}>
               <Text style={styles.label}>{t('email')}</Text>
               <TextInput
@@ -183,7 +234,7 @@ export default function LoginScreen() {
             </View>
 
             {!isSignUp && (
-              <TouchableOpacity
+              <AnimatedButton
                 style={styles.forgotPassword}
                 onPress={handleForgotPassword}
                 disabled={loading}
@@ -191,10 +242,10 @@ export default function LoginScreen() {
                 <Text style={styles.forgotPasswordText}>
                   {t('forgotPassword')}
                 </Text>
-              </TouchableOpacity>
+              </AnimatedButton>
             )}
 
-            <TouchableOpacity
+            <AnimatedButton
               style={[styles.submitButton, loading && styles.submitButtonDisabled]}
               onPress={handleSubmit}
               disabled={loading}
@@ -206,9 +257,9 @@ export default function LoginScreen() {
                   {isSignUp ? t('signUp') : t('signIn')}
                 </Text>
               )}
-            </TouchableOpacity>
+            </AnimatedButton>
 
-            <TouchableOpacity
+            <AnimatedButton
               style={styles.switchMode}
               onPress={() => {
                 setIsSignUp(!isSignUp);
@@ -222,31 +273,8 @@ export default function LoginScreen() {
                   {isSignUp ? t('signIn') : t('signUp')}
                 </Text>
               </Text>
-            </TouchableOpacity>
-
-            {/* Skip Login Button */}
-            <View style={styles.dividerContainer}>
-              <View style={styles.divider} />
-              <Text style={styles.dividerText}>oder</Text>
-              <View style={styles.divider} />
-            </View>
-
-            <TouchableOpacity
-              style={styles.skipButton}
-              onPress={handleSkipLogin}
-              disabled={loading}
-            >
-              <IconSymbol
-                ios_icon_name="arrow.right.circle"
-                android_material_icon_name="arrow-forward"
-                size={20}
-                color={colors.text}
-              />
-              <Text style={styles.skipButtonText}>
-                Ohne Anmeldung fortfahren
-              </Text>
-            </TouchableOpacity>
-          </View>
+            </AnimatedButton>
+          </Animated.View>
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
@@ -264,74 +292,84 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     flexGrow: 1,
-    paddingTop: Platform.OS === 'android' ? 60 : 80,
-    paddingBottom: 40,
-    paddingHorizontal: 24,
+    paddingTop: Platform.OS === 'android' ? 80 : 100,
+    paddingBottom: 60,
+    paddingHorizontal: 32,
   },
   backButton: {
-    width: 40,
-    height: 40,
+    width: 48,
+    height: 48,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 24,
+    backgroundColor: colors.cardBackground,
+    borderRadius: 12,
   },
   header: {
-    marginBottom: 40,
+    marginBottom: 48,
   },
   title: {
-    fontSize: 32,
-    fontWeight: '700',
+    fontSize: 36,
+    fontWeight: '800',
     color: colors.text,
-    marginBottom: 8,
+    marginBottom: 12,
+    textShadowColor: 'rgba(0, 0, 0, 0.3)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 4,
   },
   subtitle: {
-    fontSize: 16,
+    fontSize: 17,
     color: colors.textSecondary,
+    lineHeight: 24,
   },
   form: {
     width: '100%',
   },
   inputContainer: {
-    marginBottom: 20,
+    marginBottom: 24,
   },
   label: {
-    fontSize: 14,
-    fontWeight: '600',
+    fontSize: 15,
+    fontWeight: '700',
     color: colors.text,
-    marginBottom: 8,
+    marginBottom: 10,
   },
   input: {
     backgroundColor: colors.cardBackground,
-    borderRadius: 12,
-    paddingVertical: 16,
-    paddingHorizontal: 16,
-    fontSize: 16,
+    borderRadius: 14,
+    paddingVertical: 18,
+    paddingHorizontal: 18,
+    fontSize: 17,
     color: colors.text,
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: colors.grey,
   },
   forgotPassword: {
     alignSelf: 'flex-end',
-    marginBottom: 24,
+    marginBottom: 28,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
   },
   forgotPasswordText: {
-    fontSize: 14,
+    fontSize: 15,
     color: colors.green,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   submitButton: {
     backgroundColor: colors.green,
-    borderRadius: 12,
-    paddingVertical: 16,
+    borderRadius: 16,
+    paddingVertical: 18,
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 20,
+    boxShadow: '0px 4px 12px rgba(160, 255, 107, 0.3)',
+    elevation: 4,
   },
   submitButtonDisabled: {
     opacity: 0.6,
   },
   submitButtonText: {
-    fontSize: 16,
-    fontWeight: '700',
+    fontSize: 17,
+    fontWeight: '800',
     color: colors.background,
   },
   switchMode: {
@@ -339,44 +377,11 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
   },
   switchModeText: {
-    fontSize: 14,
+    fontSize: 15,
     color: colors.textSecondary,
   },
   switchModeLink: {
     color: colors.green,
-    fontWeight: '600',
-  },
-  dividerContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginVertical: 24,
-  },
-  divider: {
-    flex: 1,
-    height: 1,
-    backgroundColor: colors.grey,
-  },
-  dividerText: {
-    marginHorizontal: 16,
-    fontSize: 14,
-    color: colors.textSecondary,
-    fontWeight: '500',
-  },
-  skipButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.cardBackground,
-    borderRadius: 12,
-    paddingVertical: 16,
-    paddingHorizontal: 20,
-    borderWidth: 1,
-    borderColor: colors.grey,
-    gap: 8,
-  },
-  skipButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: colors.text,
+    fontWeight: '700',
   },
 });

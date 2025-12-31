@@ -21,6 +21,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { Href } from 'expo-router';
+import { LinearGradient } from 'expo-linear-gradient';
 
 const { width: screenWidth } = Dimensions.get('window');
 
@@ -42,27 +43,36 @@ export default function FloatingTabBar({
   tabs,
   containerWidth = screenWidth * 0.6,
   borderRadius = 30,
-  bottomMargin = 20
+  bottomMargin
 }: FloatingTabBarProps) {
   const router = useRouter();
   const pathname = usePathname();
   const theme = useTheme();
   const animatedValue = useSharedValue(0);
 
+  // Improved active tab detection with better path matching
   const activeTabIndex = React.useMemo(() => {
+    // Find the best matching tab based on the current pathname
     let bestMatch = -1;
     let bestMatchScore = 0;
 
     tabs.forEach((tab, index) => {
       let score = 0;
 
+      // Exact route match gets highest score
       if (pathname === tab.route) {
         score = 100;
-      } else if (pathname.startsWith(tab.route as string)) {
+      }
+      // Check if pathname starts with tab route (for nested routes)
+      else if (pathname.startsWith(tab.route as string)) {
         score = 80;
-      } else if (pathname.includes(tab.name)) {
+      }
+      // Check if pathname contains the tab name
+      else if (pathname.includes(tab.name)) {
         score = 60;
-      } else if (tab.route.includes('/(tabs)/') && pathname.includes(tab.route.split('/(tabs)/')[1])) {
+      }
+      // Check for partial matches in the route
+      else if (tab.route.includes('/(tabs)/') && pathname.includes(tab.route.split('/(tabs)/')[1])) {
         score = 40;
       }
 
@@ -72,6 +82,7 @@ export default function FloatingTabBar({
       }
     });
 
+    // Default to first tab if no match found
     return bestMatch >= 0 ? bestMatch : 0;
   }, [pathname, tabs]);
 
@@ -106,29 +117,27 @@ export default function FloatingTabBar({
     };
   });
 
+  // Dynamic styles based on theme
   const dynamicStyles = {
     blurContainer: {
       ...styles.blurContainer,
-      borderWidth: 1.2,
-      borderColor: 'rgba(255, 255, 255, 1)',
+      borderWidth: 1,
+      borderColor: 'rgba(255, 255, 255, 0.1)',
       ...Platform.select({
         ios: {
-          backgroundColor: theme.dark
-            ? 'rgba(28, 28, 30, 0.8)'
-            : 'rgba(255, 255, 255, 0.6)',
+          backgroundColor: 'transparent',
         },
         android: {
-          backgroundColor: theme.dark
-            ? 'rgba(28, 28, 30, 0.95)'
-            : 'rgba(255, 255, 255, 0.6)',
+          backgroundColor: 'rgba(28, 28, 30, 0.3)',
         },
         web: {
-          backgroundColor: theme.dark
-            ? 'rgba(28, 28, 30, 0.95)'
-            : 'rgba(255, 255, 255, 0.6)',
+          backgroundColor: 'rgba(28, 28, 30, 0.3)',
           backdropFilter: 'blur(10px)',
         },
       }),
+    },
+    background: {
+      ...styles.background,
     },
     indicator: {
       ...styles.indicator,
@@ -145,22 +154,32 @@ export default function FloatingTabBar({
         styles.container,
         {
           width: containerWidth,
-          marginBottom: bottomMargin
+          marginBottom: bottomMargin ?? 20
         }
       ]}>
         <BlurView
-          intensity={80}
+          intensity={40}
           style={[dynamicStyles.blurContainer, { borderRadius }]}
         >
-          <View style={styles.background} />
+          {/* Subtle gradient overlay */}
+          <LinearGradient
+            colors={[
+              'transparent',
+              theme.dark ? 'rgba(0, 0, 0, 0.15)' : 'rgba(0, 0, 0, 0.08)'
+            ]}
+            style={StyleSheet.absoluteFill}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 0, y: 1 }}
+          />
+          <View style={dynamicStyles.background} />
           <Animated.View style={[dynamicStyles.indicator, indicatorStyle]} />
           <View style={styles.tabsContainer}>
             {tabs.map((tab, index) => {
               const isActive = activeTabIndex === index;
 
               return (
+                <React.Fragment key={index}>
                 <TouchableOpacity
-                  key={index}
                   style={styles.tab}
                   onPress={() => handleTabPress(tab.route)}
                   activeOpacity={0.7}
@@ -183,6 +202,7 @@ export default function FloatingTabBar({
                     </Text>
                   </View>
                 </TouchableOpacity>
+                </React.Fragment>
               );
             })}
           </View>

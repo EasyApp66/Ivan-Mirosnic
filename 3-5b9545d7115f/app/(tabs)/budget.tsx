@@ -1,41 +1,52 @@
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, TextInput, Modal, Alert } from "react-native";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { colors } from "@/styles/commonStyles";
 import { IconSymbol } from "@/components/IconSymbol";
-import SnowAnimation from "@/components/SnowAnimation";
-import { usePremiumEnforcement } from "@/hooks/usePremiumEnforcement";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { useLimitTracking } from "@/contexts/LimitTrackingContext";
 import { useBudget, BudgetItem, MonthData } from "@/contexts/BudgetContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { BlurView } from 'expo-blur';
+import { GlassView } from 'expo-glass-effect';
+import * as Haptics from 'expo-haptics';
+import SnowBackground from '@/components/SnowBackground';
 
 export default function BudgetScreen() {
+  const router = useRouter();
+  const params = useLocalSearchParams();
   const { t } = useLanguage();
   const { isPremium } = useAuth();
-  const { shouldRollback, lastAction, clearLastAction, setLastAction } = useLimitTracking();
-  const { months, setMonths } = useBudget();
+  const { months, setMonths, loading: budgetLoading } = useBudget();
   
   const [selectedMonthId, setSelectedMonthId] = useState(months[0]?.id || '1');
   const [showAddModal, setShowAddModal] = useState(false);
   const [newItemName, setNewItemName] = useState('');
   const [newItemAmount, setNewItemAmount] = useState('');
+  
+  // Month menu state
   const [showMonthMenu, setShowMonthMenu] = useState(false);
   const [selectedMonthForMenu, setSelectedMonthForMenu] = useState<string | null>(null);
+  
+  // Item menu state
   const [showItemMenu, setShowItemMenu] = useState(false);
   const [selectedItemForMenu, setSelectedItemForMenu] = useState<string | null>(null);
+  
+  // Edit modals
   const [showEditBalanceModal, setShowEditBalanceModal] = useState(false);
   const [showEditBalanceLabelModal, setShowEditBalanceLabelModal] = useState(false);
   const [editBalanceValue, setEditBalanceValue] = useState('');
   const [editBalanceLabel, setEditBalanceLabel] = useState('BUDGET');
+  
   const [showEditItemNameModal, setShowEditItemNameModal] = useState(false);
   const [showEditItemAmountModal, setShowEditItemAmountModal] = useState(false);
   const [editItemName, setEditItemName] = useState('');
   const [editItemAmount, setEditItemAmount] = useState('');
+  
   const [showEditMonthNameModal, setShowEditMonthNameModal] = useState(false);
   const [editMonthName, setEditMonthName] = useState('');
 
+  // Update selected month when months change
   useEffect(() => {
     if (months.length > 0 && !months.find(m => m.id === selectedMonthId)) {
       setSelectedMonthId(months[0].id);
@@ -45,36 +56,15 @@ export default function BudgetScreen() {
   const selectedMonth = months.find(m => m.id === selectedMonthId);
   const accountBalance = selectedMonth?.accountBalance || 0;
   const budgetItems = selectedMonth?.budgetItems || [];
-  const maxExpensesPerMonth = Math.max(...months.map(m => m.budgetItems.length), 0);
   
-  const { canPerformAction, redirectToPremium } = usePremiumEnforcement({
-    monthsCount: months.length,
-    maxExpensesPerMonth,
-    subscriptionsCount: 0,
-    isPremium,
-  });
-
-  useEffect(() => {
-    if (shouldRollback && lastAction) {
-      if (lastAction.type === 'addMonth' && lastAction.data?.monthId) {
-        setMonths(months.filter(m => m.id !== lastAction.data.monthId));
-      } else if (lastAction.type === 'addExpense' && lastAction.data?.itemId && lastAction.data?.monthId) {
-        setMonths(months.map(m => 
-          m.id === lastAction.data.monthId 
-            ? { ...m, budgetItems: m.budgetItems.filter(item => item.id !== lastAction.data.itemId) }
-            : m
-        ));
-      }
-      clearLastAction();
-    }
-  }, [shouldRollback, lastAction, months, setMonths, clearLastAction]);
-  
+  // Sort items: pinned first, then by creation order
   const sortedBudgetItems = [...budgetItems].sort((a, b) => {
     if (a.isPinned && !b.isPinned) return -1;
     if (!a.isPinned && b.isPinned) return 1;
     return 0;
   });
   
+  // Sort months: pinned first, then by creation order
   const sortedMonths = [...months].sort((a, b) => {
     if (a.isPinned && !b.isPinned) return -1;
     if (!a.isPinned && b.isPinned) return 1;
@@ -86,32 +76,15 @@ export default function BudgetScreen() {
 
   const handleAddItem = () => {
     if (newItemName && newItemAmount && selectedMonth) {
+      // Haptic feedback when adding expense
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      
       const newItem: BudgetItem = {
         id: Date.now().toString(),
         name: newItemName.toUpperCase(),
         amount: parseFloat(newItemAmount),
         isPinned: false,
       };
-      
-      if (!canPerformAction('addExpense')) {
-        setLastAction({
-          type: 'addExpense',
-          data: { itemId: newItem.id, monthId: selectedMonthId },
-          timestamp: Date.now(),
-        });
-        
-        setMonths(months.map(m => 
-          m.id === selectedMonthId 
-            ? { ...m, budgetItems: [...m.budgetItems, newItem] }
-            : m
-        ));
-        
-        setNewItemName('');
-        setNewItemAmount('');
-        setShowAddModal(false);
-        redirectToPremium();
-        return;
-      }
       
       setMonths(months.map(m => 
         m.id === selectedMonthId 
@@ -122,6 +95,7 @@ export default function BudgetScreen() {
       setNewItemName('');
       setNewItemAmount('');
       setShowAddModal(false);
+      console.log('Added expense:', newItem);
     }
   };
 
@@ -158,24 +132,14 @@ export default function BudgetScreen() {
       budgetItems: [],
     };
     
-    if (!canPerformAction('addMonth')) {
-      setLastAction({
-        type: 'addMonth',
-        data: { monthId: newMonth.id },
-        timestamp: Date.now(),
-      });
-      
-      setMonths([...months, newMonth]);
-      setSelectedMonthId(newMonth.id);
-      redirectToPremium();
-      return;
-    }
-    
     setMonths([...months, newMonth]);
     setSelectedMonthId(newMonth.id);
+    console.log('Added month:', newMonth);
   };
 
   const handleLongPressMonth = (monthId: string) => {
+    // Haptic feedback on long press
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setSelectedMonthForMenu(monthId);
     setShowMonthMenu(true);
   };
@@ -208,21 +172,8 @@ export default function BudgetScreen() {
           })),
         };
         
-        if (!canPerformAction('addMonth')) {
-          setLastAction({
-            type: 'addMonth',
-            data: { monthId: duplicatedMonth.id },
-            timestamp: Date.now(),
-          });
-          
-          setMonths([...months, duplicatedMonth]);
-          redirectToPremium();
-          setShowMonthMenu(false);
-          setSelectedMonthForMenu(null);
-          return;
-        }
-        
         setMonths([...months, duplicatedMonth]);
+        console.log('Duplicated month:', duplicatedMonth);
       }
     }
     setShowMonthMenu(false);
@@ -252,6 +203,8 @@ export default function BudgetScreen() {
   };
 
   const handleLongPressItem = (itemId: string) => {
+    // Haptic feedback on long press
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setSelectedItemForMenu(itemId);
     setShowItemMenu(true);
   };
@@ -285,30 +238,12 @@ export default function BudgetScreen() {
           isPinned: false,
         };
         
-        if (!canPerformAction('addExpense')) {
-          setLastAction({
-            type: 'addExpense',
-            data: { itemId: duplicatedItem.id, monthId: selectedMonthId },
-            timestamp: Date.now(),
-          });
-          
-          setMonths(months.map(m => 
-            m.id === selectedMonthId 
-              ? { ...m, budgetItems: [...m.budgetItems, duplicatedItem] }
-              : m
-          ));
-          
-          redirectToPremium();
-          setShowItemMenu(false);
-          setSelectedItemForMenu(null);
-          return;
-        }
-        
         setMonths(months.map(m => 
           m.id === selectedMonthId 
             ? { ...m, budgetItems: [...m.budgetItems, duplicatedItem] }
             : m
         ));
+        console.log('Duplicated expense:', duplicatedItem);
       }
     }
     setShowItemMenu(false);
@@ -374,6 +309,8 @@ export default function BudgetScreen() {
   };
 
   const handleEditBalance = () => {
+    // Haptic feedback on long press
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setEditBalanceValue(accountBalance.toString());
     setShowEditBalanceModal(true);
   };
@@ -391,6 +328,8 @@ export default function BudgetScreen() {
   };
 
   const handleEditBalanceLabel = () => {
+    // Haptic feedback on long press
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setShowEditBalanceLabelModal(true);
   };
 
@@ -398,26 +337,38 @@ export default function BudgetScreen() {
     setShowEditBalanceLabelModal(false);
   };
 
+  const handleOpenAddModal = () => {
+    // Haptic feedback when opening add modal
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setShowAddModal(true);
+  };
+
   return (
     <View style={styles.container}>
-      <SnowAnimation />
+      {/* Snow animation in the background */}
+      <SnowBackground />
 
       <ScrollView 
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
+        {/* Account Balance Card - Glass Effect */}
         <View style={styles.balanceCardWrapper}>
           <BlurView intensity={20} tint="dark" style={styles.balanceCard}>
             <View style={styles.balanceNewLayout}>
               <TouchableOpacity 
                 onPress={handleEditBalanceLabel}
+                onLongPress={handleEditBalanceLabel}
+                delayLongPress={500}
                 style={styles.balanceLabelContainer}
               >
                 <Text style={[styles.balanceLabel, { fontSize: 19 }]}>{editBalanceLabel}</Text>
               </TouchableOpacity>
               <TouchableOpacity 
                 onPress={handleEditBalance}
+                onLongPress={handleEditBalance}
+                delayLongPress={500}
                 style={styles.balanceAmountContainer}
               >
                 <Text style={[styles.balanceAmount, { marginBottom: 1, fontSize: 37 }]}>{accountBalance.toLocaleString('de-DE')}</Text>
@@ -426,6 +377,7 @@ export default function BudgetScreen() {
           </BlurView>
         </View>
 
+        {/* Total and Remaining - Glass Effect */}
         <View style={styles.summaryCardWrapper}>
           <BlurView intensity={20} tint="dark" style={styles.summaryCard}>
             <View style={styles.summaryRow}>
@@ -441,14 +393,20 @@ export default function BudgetScreen() {
           </BlurView>
         </View>
 
+        {/* Month Selector - Horizontal Scroll */}
         <View style={styles.monthSelectorContainer}>
-          <TouchableOpacity style={styles.addMonthButton} onPress={handleAddMonth}>
-            <IconSymbol 
-              ios_icon_name="plus.circle.fill" 
-              android_material_icon_name="add-circle" 
-              size={24} 
-              color={colors.green} 
-            />
+          <TouchableOpacity style={styles.addMonthButtonWrapper} onPress={handleAddMonth}>
+            <GlassView 
+              style={styles.addMonthButton} 
+              glassEffectStyle="regular"
+            >
+              <IconSymbol 
+                ios_icon_name="plus.circle.fill" 
+                android_material_icon_name="add-circle" 
+                size={24} 
+                color={colors.green} 
+              />
+            </GlassView>
           </TouchableOpacity>
           
           <ScrollView 
@@ -484,6 +442,7 @@ export default function BudgetScreen() {
           </ScrollView>
         </View>
 
+        {/* Budget Items Grid - Glass Effect */}
         <View style={styles.budgetGrid}>
           {sortedBudgetItems.map((item, index) => (
             <React.Fragment key={index}>
@@ -524,18 +483,26 @@ export default function BudgetScreen() {
         <View style={{ height: 100 }} />
       </ScrollView>
 
+      {/* Floating Add Button with Glassmorphism */}
       <TouchableOpacity 
-        style={styles.floatingAddButton}
-        onPress={() => setShowAddModal(true)}
+        style={styles.floatingAddButtonWrapper}
+        onPress={handleOpenAddModal}
+        activeOpacity={0.8}
       >
-        <IconSymbol 
-          ios_icon_name="plus.circle.fill" 
-          android_material_icon_name="add-circle" 
-          size={56} 
-          color={colors.green} 
-        />
+        <GlassView 
+          style={styles.floatingAddButton} 
+          glassEffectStyle="regular"
+        >
+          <IconSymbol 
+            ios_icon_name="plus.circle.fill" 
+            android_material_icon_name="add-circle" 
+            size={56} 
+            color={colors.green} 
+          />
+        </GlassView>
       </TouchableOpacity>
 
+      {/* Add Item Modal */}
       <Modal
         visible={showAddModal}
         transparent
@@ -582,6 +549,7 @@ export default function BudgetScreen() {
         </View>
       </Modal>
 
+      {/* Month Menu Modal */}
       <Modal
         visible={showMonthMenu}
         transparent
@@ -627,6 +595,7 @@ export default function BudgetScreen() {
         </TouchableOpacity>
       </Modal>
 
+      {/* Item Menu Modal */}
       <Modal
         visible={showItemMenu}
         transparent
@@ -676,6 +645,7 @@ export default function BudgetScreen() {
         </TouchableOpacity>
       </Modal>
 
+      {/* Edit Balance Modal */}
       <Modal
         visible={showEditBalanceModal}
         transparent
@@ -715,6 +685,7 @@ export default function BudgetScreen() {
         </View>
       </Modal>
 
+      {/* Edit Balance Label Modal */}
       <Modal
         visible={showEditBalanceLabelModal}
         transparent
@@ -753,6 +724,7 @@ export default function BudgetScreen() {
         </View>
       </Modal>
 
+      {/* Edit Item Name Modal */}
       <Modal
         visible={showEditItemNameModal}
         transparent
@@ -791,6 +763,7 @@ export default function BudgetScreen() {
         </View>
       </Modal>
 
+      {/* Edit Item Amount Modal */}
       <Modal
         visible={showEditItemAmountModal}
         transparent
@@ -830,6 +803,7 @@ export default function BudgetScreen() {
         </View>
       </Modal>
 
+      {/* Edit Month Name Modal */}
       <Modal
         visible={showEditMonthNameModal}
         transparent
@@ -963,9 +937,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 16,
   },
+  addMonthButtonWrapper: {
+    marginRight: 8,
+    borderRadius: 20,
+    overflow: 'hidden',
+  },
   addMonthButton: {
     padding: 8,
-    marginRight: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(160, 255, 107, 0.3)',
+    backgroundColor: Platform.OS === 'android' ? 'rgba(42, 42, 42, 0.6)' : 'transparent',
   },
   monthScrollView: {
     flex: 1,
@@ -1039,11 +1021,25 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     color: colors.text,
   },
-  floatingAddButton: {
+  floatingAddButtonWrapper: {
     position: 'absolute',
     bottom: 100,
     right: 24,
     zIndex: 100,
+    borderRadius: 30,
+    overflow: 'hidden',
+    boxShadow: '0px 8px 24px rgba(160, 255, 107, 0.4)',
+    elevation: 12,
+  },
+  floatingAddButton: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(160, 255, 107, 0.3)',
+    backgroundColor: Platform.OS === 'android' ? 'rgba(42, 42, 42, 0.6)' : 'transparent',
   },
   modalOverlay: {
     flex: 1,

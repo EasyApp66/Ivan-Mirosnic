@@ -1,71 +1,136 @@
 
 import React, { useState, useEffect } from "react";
-import { View, Text, StyleSheet, ScrollView, Platform, Pressable, Alert } from "react-native";
+import { View, Text, StyleSheet, ScrollView, Platform, Pressable, Alert, Modal, TextInput, TouchableOpacity, Linking } from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { colors } from "@/styles/commonStyles";
 import { IconSymbol } from "@/components/IconSymbol";
-import SnowAnimation from "@/components/SnowAnimation";
 import { PremiumModal } from "@/components/PremiumModal";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { useLimitTracking } from "@/contexts/LimitTrackingContext";
 import * as MailComposer from 'expo-mail-composer';
 import { BlurView } from 'expo-blur';
+import { supabase } from "@/lib/supabase";
+import SnowBackground from '@/components/SnowBackground';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function ProfileScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const { user, signOut, isAdmin, isPremium } = useAuth();
   const { language, toggleLanguage, t } = useLanguage();
-  const { setShouldRollback, previousRoute, setPreviousRoute } = useLimitTracking();
   const [showPremiumModal, setShowPremiumModal] = useState(false);
+  const [userName, setUserName] = useState<string>('');
+  const [showNameModal, setShowNameModal] = useState(false);
+  const [tempName, setTempName] = useState('');
 
+  // Load user name from Supabase
+  useEffect(() => {
+    const loadUserName = async () => {
+      if (user) {
+        try {
+          const { data, error } = await supabase
+            .from('profiles')
+            .select('name')
+            .eq('id', user.id)
+            .single();
+
+          if (error) {
+            console.error('Error loading user name:', error);
+          } else if (data?.name) {
+            setUserName(data.name);
+          }
+        } catch (error) {
+          console.error('Error loading user name:', error);
+        }
+      }
+    };
+
+    loadUserName();
+  }, [user]);
+
+  // Check if we should show premium modal on mount (when redirected from limit)
   useEffect(() => {
     if (params.showPremium === 'true') {
+      console.log('Showing premium modal');
       setShowPremiumModal(true);
     }
   }, [params]);
 
   const handleClosePremiumModal = () => {
-    if (params.showPremium === 'true') {
-      setShouldRollback(true);
-    }
-    
+    console.log('Closing premium modal');
     setShowPremiumModal(false);
     
-    if (previousRoute) {
-      router.replace(previousRoute);
-      setPreviousRoute(null);
-    } else {
-      router.replace('/(tabs)/budget');
-    }
+    // Navigate back to budget screen
+    router.replace('/(tabs)/budget');
   };
 
   const handleLogout = async () => {
+    console.log('Handle logout/login');
     if (user) {
-      await signOut();
-      router.replace('/(tabs)/(home)');
+      try {
+        console.log('Starting logout process...');
+        
+        // 1. Sign out from Supabase
+        await signOut();
+        console.log('Supabase signOut completed');
+        
+        // 2. Clear all AsyncStorage data
+        try {
+          await AsyncStorage.clear();
+          console.log('AsyncStorage cleared');
+        } catch (storageError) {
+          console.error('Error clearing AsyncStorage:', storageError);
+        }
+        
+        // 3. Clear web localStorage if on web platform
+        if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
+          try {
+            window.localStorage.clear();
+            console.log('Web localStorage cleared');
+          } catch (webStorageError) {
+            console.error('Error clearing web localStorage:', webStorageError);
+          }
+        }
+        
+        // 4. Navigate to welcome screen and reset navigation stack
+        console.log('Navigating to welcome screen...');
+        router.replace('/(tabs)/(home)');
+        
+        console.log('Logout completed successfully');
+      } catch (error) {
+        console.error('Error during logout:', error);
+        Alert.alert(
+          'Logout Fehler',
+          'Es gab ein Problem beim Ausloggen. Bitte versuchen Sie es erneut.',
+          [{ text: 'OK' }]
+        );
+      }
     } else {
       router.push('/(tabs)/(home)/login');
     }
   };
 
   const handleRestorePremium = async () => {
+    console.log('Restore Premium - Navigating to Welcome Screen');
+    // Sign out the user first
     if (user) {
       await signOut();
     }
+    // Navigate to welcome screen for re-login
     router.replace('/(tabs)/(home)');
   };
 
   const handleSendEmail = async (subject: string) => {
     try {
       const isAvailable = await MailComposer.isAvailableAsync();
+      console.log('Mail composer available:', isAvailable);
       
       if (isAvailable) {
-        await MailComposer.composeAsync({
+        const result = await MailComposer.composeAsync({
           recipients: ['ivanmirosnic006@gmail.com'],
           subject: subject,
         });
+        console.log('Mail composer result:', result);
       } else {
         Alert.alert(
           t('emailNotAvailable'),
@@ -79,6 +144,66 @@ export default function ProfileScreen() {
         t('error'),
         t('emailCouldNotOpen'),
         [{ text: t('ok') }]
+      );
+    }
+  };
+
+  const handleOpenNameModal = () => {
+    setTempName(userName);
+    setShowNameModal(true);
+  };
+
+  const handleSaveName = async () => {
+    if (!user) {
+      console.log('No user logged in');
+      setShowNameModal(false);
+      return;
+    }
+
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ name: tempName || null })
+        .eq('id', user.id);
+
+      if (error) {
+        console.error('Error saving name:', error);
+        Alert.alert(t('error'), 'Fehler beim Speichern des Namens');
+      } else {
+        setUserName(tempName);
+        console.log('Name saved successfully:', tempName);
+      }
+    } catch (error) {
+      console.error('Error saving name:', error);
+      Alert.alert(t('error'), 'Fehler beim Speichern des Namens');
+    }
+
+    setShowNameModal(false);
+  };
+
+  // Function to open external URLs in browser
+  const openExternalURL = async (url: string, title: string) => {
+    try {
+      console.log(`Opening external URL: ${url}`);
+      const supported = await Linking.canOpenURL(url);
+      
+      if (supported) {
+        await Linking.openURL(url);
+        console.log(`Successfully opened ${title}`);
+      } else {
+        console.error(`Cannot open URL: ${url}`);
+        Alert.alert(
+          'Fehler',
+          `Die URL konnte nicht geöffnet werden: ${url}`,
+          [{ text: 'OK' }]
+        );
+      }
+    } catch (error) {
+      console.error(`Error opening ${title}:`, error);
+      Alert.alert(
+        'Fehler',
+        `Die Seite konnte nicht geöffnet werden. Bitte versuchen Sie es später erneut.`,
+        [{ text: 'OK' }]
       );
     }
   };
@@ -111,35 +236,35 @@ export default function ProfileScreen() {
       icon: 'star',
       iosIcon: 'star.fill',
       onPress: () => setShowPremiumModal(true),
-      hidden: isAdmin,
+      hidden: isAdmin, // Hide for admins
     },
     {
       id: 'agb',
       title: t('agb'),
       icon: 'description',
       iosIcon: 'doc.text',
-      onPress: () => router.push('/(tabs)/legal/agb'),
+      onPress: () => openExternalURL('https://www.easycash-app.com/agb', 'AGB'),
     },
     {
       id: 'terms',
       title: t('terms'),
       icon: 'gavel',
       iosIcon: 'doc.text.fill',
-      onPress: () => router.push('/(tabs)/legal/nutzungsbedingungen'),
+      onPress: () => openExternalURL('https://www.easycash-app.com/nutzungsbedingungen', 'Nutzungsbedingungen'),
     },
     {
       id: 'privacy',
       title: t('privacy'),
       icon: 'privacy-tip',
       iosIcon: 'lock.shield',
-      onPress: () => router.push('/(tabs)/legal/datenschutz'),
+      onPress: () => openExternalURL('https://www.easycash-app.com/datenschutz', 'Datenschutzerklärung'),
     },
     {
       id: 'imprint',
       title: t('imprint'),
       icon: 'info',
       iosIcon: 'info.circle',
-      onPress: () => router.push('/(tabs)/legal/impressum'),
+      onPress: () => openExternalURL('https://www.easycash-app.com/impressum', 'Impressum'),
     },
     {
       id: 'support',
@@ -159,13 +284,15 @@ export default function ProfileScreen() {
 
   return (
     <View style={styles.container}>
-      <SnowAnimation />
+      {/* Snow animation in the background */}
+      <SnowBackground />
 
       <ScrollView 
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
+        {/* User Info Section - Glass Effect */}
         <View style={styles.userSectionWrapper}>
           <BlurView intensity={30} tint="dark" style={styles.userSection}>
             <View style={styles.avatarContainer}>
@@ -178,20 +305,15 @@ export default function ProfileScreen() {
                 />
               </View>
             </View>
-            {user ? (
-              <React.Fragment>
-                <Text style={styles.userName}>
-                  {user.email?.split('@')[0] || 'User'}
-                </Text>
-                <Text style={styles.userEmail}>{user.email}</Text>
-              </React.Fragment>
-            ) : (
-              <React.Fragment>
-                <Text style={styles.userName}>{t('guest')}</Text>
-                <Text style={styles.userEmail}>{t('notLoggedIn')}</Text>
-              </React.Fragment>
-            )}
             
+            {/* Clickable Name Field */}
+            <TouchableOpacity onPress={handleOpenNameModal} activeOpacity={0.7}>
+              <Text style={styles.userName}>
+                {userName || 'Namen eingeben'}
+              </Text>
+            </TouchableOpacity>
+            
+            {/* Admin Badge */}
             {isAdmin && (
               <View style={styles.adminBadgeWrapper}>
                 <BlurView intensity={40} tint="light" style={styles.adminBadge}>
@@ -206,6 +328,7 @@ export default function ProfileScreen() {
               </View>
             )}
             
+            {/* Premium Badge */}
             <View style={styles.premiumBadgeWrapper}>
               <BlurView 
                 intensity={isPremium ? 40 : 20} 
@@ -220,6 +343,7 @@ export default function ProfileScreen() {
           </BlurView>
         </View>
 
+        {/* Menu Items - Glass Effect */}
         <View style={styles.menuSection}>
           {menuItems.map((item) => (
             <Pressable 
@@ -228,7 +352,10 @@ export default function ProfileScreen() {
                 styles.menuItemWrapper,
                 pressed && styles.menuItemPressed
               ]}
-              onPress={item.onPress}
+              onPress={() => {
+                console.log(`Menu item pressed: ${item.title}`);
+                item.onPress();
+              }}
             >
               <BlurView intensity={20} tint="dark" style={styles.menuItem}>
                 <View style={styles.menuItemLeft}>
@@ -253,11 +380,69 @@ export default function ProfileScreen() {
           ))}
         </View>
 
+        {/* Email Display Section */}
+        {user && (
+          <View style={styles.emailSectionWrapper}>
+            <BlurView intensity={20} tint="dark" style={styles.emailSection}>
+              <View style={styles.emailRow}>
+                <IconSymbol 
+                  ios_icon_name="envelope.fill" 
+                  android_material_icon_name="email" 
+                  size={20} 
+                  color={colors.green} 
+                />
+                <Text style={styles.emailText}>{user.email}</Text>
+              </View>
+            </BlurView>
+          </View>
+        )}
+
+        {/* App Version */}
         <View style={styles.versionSection}>
-          <Text style={styles.versionText}>{t('appVersion')} 1.0.5</Text>
+          <Text style={styles.versionText}>{t('appVersion')} 1.00.00</Text>
         </View>
       </ScrollView>
 
+      {/* Name Input Modal */}
+      <Modal
+        visible={showNameModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowNameModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Namen eingeben</Text>
+            
+            <TextInput
+              style={styles.input}
+              placeholder="Dein Name"
+              placeholderTextColor={colors.textSecondary}
+              value={tempName}
+              onChangeText={setTempName}
+              autoFocus
+            />
+            
+            <View style={styles.modalButtons}>
+              <TouchableOpacity 
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={() => setShowNameModal(false)}
+              >
+                <Text style={styles.modalButtonText}>Abbrechen</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={[styles.modalButton, styles.saveButton]}
+                onPress={handleSaveName}
+              >
+                <Text style={styles.saveButtonText}>Speichern</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Premium Purchase Modal - Only show for non-admins */}
       {!isAdmin && (
         <PremiumModal 
           visible={showPremiumModal}
@@ -311,12 +496,8 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: '800',
     color: colors.text,
-    marginBottom: 6,
-  },
-  userEmail: {
-    fontSize: 16,
-    color: colors.textSecondary,
     marginBottom: 20,
+    textAlign: 'center',
   },
   adminBadgeWrapper: {
     borderRadius: 24,
@@ -409,6 +590,31 @@ const styles = StyleSheet.create({
     color: colors.text,
     flex: 1,
   },
+  emailSectionWrapper: {
+    marginBottom: 24,
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  emailSection: {
+    paddingVertical: 18,
+    paddingHorizontal: 20,
+    borderRadius: 16,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    backgroundColor: 'rgba(42, 42, 42, 0.4)',
+  },
+  emailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  emailText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.text,
+    flex: 1,
+  },
   versionSection: {
     alignItems: 'center',
     paddingVertical: 24,
@@ -417,5 +623,60 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.textSecondary,
     fontWeight: '500',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  modalContent: {
+    backgroundColor: colors.cardBackground,
+    borderRadius: 16,
+    padding: 24,
+    width: '100%',
+    maxWidth: 400,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.text,
+    marginBottom: 24,
+    textAlign: 'center',
+  },
+  input: {
+    backgroundColor: colors.background,
+    borderRadius: 12,
+    padding: 16,
+    fontSize: 16,
+    color: colors.text,
+    marginBottom: 16,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  modalButton: {
+    flex: 1,
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  cancelButton: {
+    backgroundColor: colors.grey,
+  },
+  saveButton: {
+    backgroundColor: colors.green,
+  },
+  modalButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.text,
+  },
+  saveButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#000000',
   },
 });
